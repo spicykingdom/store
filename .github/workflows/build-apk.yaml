@@ -59,6 +59,9 @@ jobs:
           npx cap add android
           npx capacitor-assets generate --android --iconBackgroundColor '#E11D48'
 
+          # Add Google Maven Central mirror to bypass Maven Central 429 rate-limits
+          sed -i 's|mavenCentral()|maven { url "https://maven-central.storage-download.googleapis.com/maven2/" }\n        mavenCentral()|g' android/build.gradle
+
           MANIFEST="android/app/src/main/AndroidManifest.xml"
           sed -i 's/<application/<application android:usesCleartextTraffic="true"/' "$MANIFEST"
           sed -i 's/<uses-permission android:name="android.permission.INTERNET" \/>/<uses-permission android:name="android.permission.INTERNET" \/>\n    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" \/>\n    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="32" \/>/' "$MANIFEST"
@@ -71,7 +74,7 @@ jobs:
           npx cap sync android
           cd android
           chmod +x gradlew
-          ./gradlew assembleDebug
+          ./gradlew assembleDebug --no-daemon
 
       - name: Upload Spicy Kingdom POS APK
         uses: actions/upload-artifact@v4
