@@ -1,0 +1,36 @@
+{
+  "packageId": "store.spicykingdom.pos",
+  "host": "spicykingdom.store",
+  "name": "Spicy Kingdom POS",
+  "launcherName": "Spicy Kingdom",
+  "display": "standalone",
+  "themeColor": "#E11D48",
+  "navigationColor": "#0F172A",
+  "backgroundColor": "#FFF7ED",
+  "enableNotifications": false,
+  "startUrl": "/",
+  "iconUrl": "https://spicykingdom.store/icon-512.png",
+  "maskableIconUrl": "https://spicykingdom.store/icon-512.png",
+  "splashScreenFadeOutDuration": 300,
+  "signingKey": {
+    "path": "./android.keystore",
+    "alias": "spicykingdom"
+  },
+  "appVersionCode": 1,
+  "appVersionName": "1.0.0",
+  "shortcuts": [
+    {
+      "name": "Operations & ERP",
+      "shortName": "Ops ERP",
+      "url": "https://spicykingdom.store/ops.html",
+      "chosenIconUrl": "https://spicykingdom.store/icon-512.png"
+    }
+  ],
+  "generatorApp": "bubblewrap-cli",
+  "webManifestUrl": "https://spicykingdom.store/manifest.json",
+  "fallbackType": "customtabs",
+  "features": {},
+  "enableSiteSettingsShortcut": true,
+  "isChromeOSOnly": false,
+  "orientation": "default"
+}
