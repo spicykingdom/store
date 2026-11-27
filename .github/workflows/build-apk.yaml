@@ -8,6 +8,9 @@ on:
 jobs:
   build-twa:
     runs-on: ubuntu-latest
+    env:
+      ANDROID_HOME: /usr/local/lib/android/sdk
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
     steps:
       - name: Checkout Repo
         uses: actions/checkout@v4
@@ -18,16 +21,21 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
 
+      - name: Accept Android SDK Licenses
+        run: yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
+
       - name: Install Bubblewrap CLI
         run: npm install -g @bubblewrap/cli
+
+      - name: Configure Bubblewrap Paths
+        run: |
+          mkdir -p ~/.bubblewrap
+          echo "{\"jdkPath\":\"$JAVA_HOME\",\"androidSdkPath\":\"$ANDROID_HOME\"}" > ~/.bubblewrap/config.json
 
       - name: Generate Release Keystore
         run: |
@@ -36,20 +44,19 @@ jobs:
             -storepass spicy1234 -keypass spicy1234 \
             -dname "CN=Spicy Kingdom, OU=POS, O=Spicy Kingdom, L=Madanapalle, S=AP, C=IN"
 
-      - name: Configure Bubblewrap Paths
-        run: |
-          mkdir -p ~/.bubblewrap
-          echo "{\"jdkPath\":\"$JAVA_HOME\",\"androidSdkPath\":\"$ANDROID_HOME\"}" > ~/.bubblewrap/config.json
-
-      - name: Build Signed Android APK & AAB
+      - name: Initialize & Build Android TWA
         env:
           BUBBLEWRAP_KEYSTORE_PASSWORD: spicy1234
           BUBBLEWRAP_KEY_PASSWORD: spicy1234
         run: |
-          yes | bubblewrap update --skipVersionUpgrade
+          if [ ! -f "build.gradle" ]; then
+            yes "" | bubblewrap init --manifest="https://spicykingdom.store/manifest.json"
+          else
+            yes "" | bubblewrap update --skipVersionUpgrade
+          fi
           bubblewrap build --skipPwaValidation
 
-      - name: Extract SHA-256 Fingerprint for Digital Asset Links
+      - name: Extract SHA-256 Fingerprint
         run: |
           keytool -list -v -keystore android.keystore -alias spicykingdom -storepass spicy1234 | grep "SHA256:"
 
