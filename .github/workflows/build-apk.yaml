@@ -98,29 +98,56 @@ jobs:
           npx cap add android
           npx capacitor-assets generate --android --iconBackgroundColor '#E11D48' --splashBackgroundColor '#FFF7ED'
 
-          # Add Google Maven Central mirror to bypass 429 rate-limits
-          sed -i 's|mavenCentral()|maven { url "https://maven-central.storage-download.googleapis.com/maven2/" }\n        mavenCentral()|g' android/build.gradle
+          # 5. Safely patch build.gradle, AndroidManifest.xml, and MainActivity.java using Node
+          node -e '
+            const fs = require("fs");
 
-          # 5. Add Storage Permissions & Deep-Link Intent Filter for https://spicykingdom.store
-          MANIFEST="android/app/src/main/AndroidManifest.xml"
-          sed -i 's/<application/<application android:usesCleartextTraffic="true"/' "$MANIFEST"
-          sed -i 's/<uses-permission android:name="android.permission.INTERNET" \/>/<uses-permission android:name="android.permission.INTERNET" \/>\n    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" \/>\n    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="32" \/>/' "$MANIFEST"
-          sed -i 's|</activity>|    <intent-filter android:autoVerify="true">\n                <action android:name="android.intent.action.VIEW" />\n                <category android:name="android.intent.category.DEFAULT" />\n                <category android:name="android.intent.category.BROWSABLE" />\n                <data android:scheme="https" android:host="spicykingdom.store" />\n            </intent-filter>\n        </activity>|' "$MANIFEST"
+            // Add Google Maven Central mirror to bypass 429 rate-limits
+            let gradle = fs.readFileSync("android/build.gradle", "utf8");
+            gradle = gradle.replace(/mavenCentral\(\)/g, "maven { url \"https://maven-central.storage-download.googleapis.com/maven2/\" }\n        mavenCentral()");
+            fs.writeFileSync("android/build.gradle", gradle);
 
-          # 6. Set Rose Status Bar & Warm Cream Window Background (Zero Black Flash)
+            // Patch AndroidManifest.xml cleanly (only the first </activity> tag)
+            let manifest = fs.readFileSync("android/app/src/main/AndroidManifest.xml", "utf8");
+            manifest = manifest.replace("<application", "<application android:usesCleartextTraffic=\"true\"");
+            manifest = manifest.replace(
+              "<uses-permission android:name=\"android.permission.INTERNET\" />",
+              "<uses-permission android:name=\"android.permission.INTERNET\" />\n    <uses-permission android:name=\"android.permission.READ_EXTERNAL_STORAGE\" />\n    <uses-permission android:name=\"android.permission.WRITE_EXTERNAL_STORAGE\" android:maxSdkVersion=\"32\" />"
+            );
+            const intentFilter = `
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="spicykingdom.store" />
+            </intent-filter>
+        </activity>`;
+            manifest = manifest.replace("</activity>", intentFilter);
+            fs.writeFileSync("android/app/src/main/AndroidManifest.xml", manifest);
+          '
+
           MAIN_ACT=$(find android/app/src/main/java -name "MainActivity.java")
           if [ -n "$MAIN_ACT" ]; then
-            sed -i 's/super.onCreate(savedInstanceState);/super.onCreate(savedInstanceState); getWindow().setStatusBarColor(android.graphics.Color.parseColor("#E11D48")); getWindow().getDecorView().setBackgroundColor(android.graphics.Color.parseColor("#FFF7ED"));/' "$MAIN_ACT"
+            node -e '
+              const fs = require("fs");
+              const file = process.argv[1];
+              let code = fs.readFileSync(file, "utf8");
+              code = code.replace(
+                "super.onCreate(savedInstanceState);",
+                "super.onCreate(savedInstanceState);\n        getWindow().setStatusBarColor(android.graphics.Color.parseColor(\"#E11D48\"));\n        getWindow().getDecorView().setBackgroundColor(android.graphics.Color.parseColor(\"#FFF7ED\"));"
+              );
+              fs.writeFileSync(file, code);
+            ' "$MAIN_ACT"
           fi
 
-          # 7. Sync, Build APK & Print Debug Keystore SHA-256 for assetlinks.json
+          # 6. Sync, Build APK & Print Debug Keystore SHA-256 for assetlinks.json
           npx cap sync android
           cd android
           chmod +x gradlew
           ./gradlew assembleDebug --no-daemon
 
           echo "=== COPY THIS SHA256 FOR .well-known/assetlinks.json ==="
-          keytool -list -v -keystore ~/.android/debug.keystore -alias androiddebugkey -storepass android -keypass android | grep "SHA256:"
+          keytool -list -v -keystore ~/.android/debug.keystore -alias androiddebugkey -storepass android -keypass android | grep "SHA256:" || true
 
       - name: Upload Spicy Kingdom POS APK
         uses: actions/upload-artifact@v4
