@@ -27,7 +27,6 @@ jobs:
         run: |
           mkdir -p www assets
 
-          # 1. Branded fallback/loading screen (prevents white/black flash)
           cat << 'EOF' > www/index.html
           <!DOCTYPE html>
           <html>
@@ -47,28 +46,27 @@ jobs:
           </html>
           EOF
 
-          # 2. Install Capacitor 6 + Splash Screen & Assets
           npm init -y
           npm install @capacitor/core@6 @capacitor/cli@6 @capacitor/android@6 @capacitor/splash-screen@6 @capacitor/filesystem@6 @capacitor/share@6 @capacitor/assets sharp
 
-          # 3. Prepare 1024x1024 Icon & 2732x2732 Splash Screen
           curl -L -s "https://spicykingdom.store/icon-512.png" -o raw_logo.png
-          node -e '
-            const sharp = require("sharp");
-            (async () => {
-              await sharp("raw_logo.png").resize(1024, 1024, { fit: "cover" }).png().toFile("assets/icon-only.png");
-              require("fs").copyFileSync("assets/icon-only.png", "assets/icon.png");
-              const resizedIcon = await sharp("raw_logo.png").resize(420, 420, { fit: "contain" }).png().toBuffer();
-              await sharp({
-                create: { width: 2732, height: 2732, channels: 4, background: "#FFF7ED" }
-              })
-              .composite([{ input: resizedIcon, gravity: "center" }])
-              .png()
-              .toFile("assets/splash.png");
-            })();
-          '
+          cat << 'EOF' > make-assets.js
+          const sharp = require("sharp");
+          const fs = require("fs");
+          (async () => {
+            await sharp("raw_logo.png").resize(1024, 1024, { fit: "cover" }).png().toFile("assets/icon-only.png");
+            fs.copyFileSync("assets/icon-only.png", "assets/icon.png");
+            const resizedIcon = await sharp("raw_logo.png").resize(420, 420, { fit: "contain" }).png().toBuffer();
+            await sharp({
+              create: { width: 2732, height: 2732, channels: 4, background: "#FFF7ED" }
+            })
+            .composite([{ input: resizedIcon, gravity: "center" }])
+            .png()
+            .toFile("assets/splash.png");
+          })();
+          EOF
+          node make-assets.js
 
-          # 4. Initialize Capacitor with Splash & Warm Background Config
           npx cap init "Spicy Kingdom POS" "store.spicykingdom.pos" --web-dir www
 
           cat << 'EOF' > capacitor.config.json
@@ -98,49 +96,47 @@ jobs:
           npx cap add android
           npx capacitor-assets generate --android --iconBackgroundColor '#E11D48' --splashBackgroundColor '#FFF7ED'
 
-          # 5. Safely patch build.gradle, AndroidManifest.xml, and MainActivity.java using Node
-          node -e '
-            const fs = require("fs");
+          cat << 'EOF' > patch-android.js
+          const fs = require("fs");
 
-            // Add Google Maven Central mirror to bypass 429 rate-limits
-            let gradle = fs.readFileSync("android/build.gradle", "utf8");
-            gradle = gradle.replace(/mavenCentral\(\)/g, "maven { url \"https://maven-central.storage-download.googleapis.com/maven2/\" }\n        mavenCentral()");
-            fs.writeFileSync("android/build.gradle", gradle);
+          let gradle = fs.readFileSync("android/build.gradle", "utf8");
+          gradle = gradle.replace(/mavenCentral\(\)/g, 'maven { url "https://maven-central.storage-download.googleapis.com/maven2/" }\n        mavenCentral()');
+          fs.writeFileSync("android/build.gradle", gradle);
 
-            // Patch AndroidManifest.xml cleanly (only the first </activity> tag)
-            let manifest = fs.readFileSync("android/app/src/main/AndroidManifest.xml", "utf8");
-            manifest = manifest.replace("<application", "<application android:usesCleartextTraffic=\"true\"");
-            manifest = manifest.replace(
-              "<uses-permission android:name=\"android.permission.INTERNET\" />",
-              "<uses-permission android:name=\"android.permission.INTERNET\" />\n    <uses-permission android:name=\"android.permission.READ_EXTERNAL_STORAGE\" />\n    <uses-permission android:name=\"android.permission.WRITE_EXTERNAL_STORAGE\" android:maxSdkVersion=\"32\" />"
-            );
-            const intentFilter = `
-            <intent-filter android:autoVerify="true">
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="https" android:host="spicykingdom.store" />
-            </intent-filter>
-        </activity>`;
-            manifest = manifest.replace("</activity>", intentFilter);
-            fs.writeFileSync("android/app/src/main/AndroidManifest.xml", manifest);
-          '
+          let manifest = fs.readFileSync("android/app/src/main/AndroidManifest.xml", "utf8");
+          manifest = manifest.replace("<application", '<application android:usesCleartextTraffic="true"');
+          manifest = manifest.replace(
+            '<uses-permission android:name="android.permission.INTERNET" />',
+            '<uses-permission android:name="android.permission.INTERNET" />\n    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />\n    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="32" />'
+          );
+          const intentFilter = `
+              <intent-filter android:autoVerify="true">
+                  <action android:name="android.intent.action.VIEW" />
+                  <category android:name="android.intent.category.DEFAULT" />
+                  <category android:name="android.intent.category.BROWSABLE" />
+                  <data android:scheme="https" android:host="spicykingdom.store" />
+              </intent-filter>
+          </activity>`;
+          manifest = manifest.replace("</activity>", intentFilter);
+          fs.writeFileSync("android/app/src/main/AndroidManifest.xml", manifest);
+          EOF
+          node patch-android.js
 
           MAIN_ACT=$(find android/app/src/main/java -name "MainActivity.java")
           if [ -n "$MAIN_ACT" ]; then
-            node -e '
-              const fs = require("fs");
-              const file = process.argv[1];
-              let code = fs.readFileSync(file, "utf8");
-              code = code.replace(
-                "super.onCreate(savedInstanceState);",
-                "super.onCreate(savedInstanceState);\n        getWindow().setStatusBarColor(android.graphics.Color.parseColor(\"#E11D48\"));\n        getWindow().getDecorView().setBackgroundColor(android.graphics.Color.parseColor(\"#FFF7ED\"));"
-              );
-              fs.writeFileSync(file, code);
-            ' "$MAIN_ACT"
+            cat << 'EOF' > patch-main.js
+          const fs = require("fs");
+          const file = process.argv[2];
+          let code = fs.readFileSync(file, "utf8");
+          code = code.replace(
+            "super.onCreate(savedInstanceState);",
+            'super.onCreate(savedInstanceState);\n        getWindow().setStatusBarColor(android.graphics.Color.parseColor("#E11D48"));\n        getWindow().getDecorView().setBackgroundColor(android.graphics.Color.parseColor("#FFF7ED"));'
+          );
+          fs.writeFileSync(file, code);
+          EOF
+            node patch-main.js "$MAIN_ACT"
           fi
 
-          # 6. Sync, Build APK & Print Debug Keystore SHA-256 for assetlinks.json
           npx cap sync android
           cd android
           chmod +x gradlew
