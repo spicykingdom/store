@@ -23,24 +23,52 @@ jobs:
           distribution: 'temurin'
           java-version: '21'
 
-      - name: Prepare App Icon & Build Live-URL APK
+      - name: Build Splash-Fixed & Deep-Link APK
         run: |
           mkdir -p www assets
-          echo "<html><body>Loading Spicy Kingdom POS...</body></html>" > www/index.html
 
+          # 1. Branded fallback/loading screen (prevents white/black flash)
+          cat << 'EOF' > www/index.html
+          <!DOCTYPE html>
+          <html>
+          <head>
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <style>
+              body { margin:0; height:100vh; display:flex; flex-direction:column; align-items:center; justify-content:center; background:#FFF7ED; font-family:sans-serif; color:#1E293B; }
+              .logo { width:84px; height:84px; border-radius:20px; background:#E11D48; color:#fff; font-size:34px; font-weight:900; display:flex; align-items:center; justify-content:center; box-shadow:0 10px 25px rgba(225,29,72,0.3); margin-bottom:16px; }
+              .sub { font-size:13px; color:#64748B; margin-top:6px; }
+            </style>
+          </head>
+          <body>
+            <div class="logo">SK</div>
+            <strong>SPICY KINGDOM POS</strong>
+            <div class="sub">Connecting to live terminal...</div>
+          </body>
+          </html>
+          EOF
+
+          # 2. Install Capacitor 6 + Splash Screen & Assets
           npm init -y
-          npm install @capacitor/core@6 @capacitor/cli@6 @capacitor/android@6 @capacitor/filesystem@6 @capacitor/share@6 @capacitor/assets sharp
+          npm install @capacitor/core@6 @capacitor/cli@6 @capacitor/android@6 @capacitor/splash-screen@6 @capacitor/filesystem@6 @capacitor/share@6 @capacitor/assets sharp
 
+          # 3. Prepare 1024x1024 Icon & 2732x2732 Splash Screen
           curl -L -s "https://spicykingdom.store/icon-512.png" -o raw_logo.png
           node -e '
             const sharp = require("sharp");
-            sharp("raw_logo.png")
-              .resize(1024, 1024, { fit: "cover" })
+            (async () => {
+              await sharp("raw_logo.png").resize(1024, 1024, { fit: "cover" }).png().toFile("assets/icon-only.png");
+              require("fs").copyFileSync("assets/icon-only.png", "assets/icon.png");
+              const resizedIcon = await sharp("raw_logo.png").resize(420, 420, { fit: "contain" }).png().toBuffer();
+              await sharp({
+                create: { width: 2732, height: 2732, channels: 4, background: "#FFF7ED" }
+              })
+              .composite([{ input: resizedIcon, gravity: "center" }])
               .png()
-              .toFile("assets/icon-only.png")
-              .then(() => require("fs").copyFileSync("assets/icon-only.png", "assets/icon.png"));
+              .toFile("assets/splash.png");
+            })();
           '
 
+          # 4. Initialize Capacitor with Splash & Warm Background Config
           npx cap init "Spicy Kingdom POS" "store.spicykingdom.pos" --web-dir www
 
           cat << 'EOF' > capacitor.config.json
@@ -48,33 +76,51 @@ jobs:
             "appId": "store.spicykingdom.pos",
             "appName": "Spicy Kingdom POS",
             "webDir": "www",
+            "backgroundColor": "#FFF7ED",
             "server": {
               "url": "https://spicykingdom.store/",
               "cleartext": true,
               "androidScheme": "https"
+            },
+            "plugins": {
+              "SplashScreen": {
+                "launchShowDuration": 2500,
+                "launchAutoHide": true,
+                "backgroundColor": "#FFF7ED",
+                "androidScaleType": "CENTER_CROP",
+                "showSpinner": true,
+                "spinnerColor": "#E11D48"
+              }
             }
           }
           EOF
 
           npx cap add android
-          npx capacitor-assets generate --android --iconBackgroundColor '#E11D48'
+          npx capacitor-assets generate --android --iconBackgroundColor '#E11D48' --splashBackgroundColor '#FFF7ED'
 
-          # Add Google Maven Central mirror to bypass Maven Central 429 rate-limits
+          # Add Google Maven Central mirror to bypass 429 rate-limits
           sed -i 's|mavenCentral()|maven { url "https://maven-central.storage-download.googleapis.com/maven2/" }\n        mavenCentral()|g' android/build.gradle
 
+          # 5. Add Storage Permissions & Deep-Link Intent Filter for https://spicykingdom.store
           MANIFEST="android/app/src/main/AndroidManifest.xml"
           sed -i 's/<application/<application android:usesCleartextTraffic="true"/' "$MANIFEST"
           sed -i 's/<uses-permission android:name="android.permission.INTERNET" \/>/<uses-permission android:name="android.permission.INTERNET" \/>\n    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" \/>\n    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="32" \/>/' "$MANIFEST"
+          sed -i 's|</activity>|    <intent-filter android:autoVerify="true">\n                <action android:name="android.intent.action.VIEW" />\n                <category android:name="android.intent.category.DEFAULT" />\n                <category android:name="android.intent.category.BROWSABLE" />\n                <data android:scheme="https" android:host="spicykingdom.store" />\n            </intent-filter>\n        </activity>|' "$MANIFEST"
 
+          # 6. Set Rose Status Bar & Warm Cream Window Background (Zero Black Flash)
           MAIN_ACT=$(find android/app/src/main/java -name "MainActivity.java")
           if [ -n "$MAIN_ACT" ]; then
-            sed -i 's/super.onCreate(savedInstanceState);/super.onCreate(savedInstanceState); getWindow().setStatusBarColor(android.graphics.Color.parseColor("#E11D48"));/' "$MAIN_ACT"
+            sed -i 's/super.onCreate(savedInstanceState);/super.onCreate(savedInstanceState); getWindow().setStatusBarColor(android.graphics.Color.parseColor("#E11D48")); getWindow().getDecorView().setBackgroundColor(android.graphics.Color.parseColor("#FFF7ED"));/' "$MAIN_ACT"
           fi
 
+          # 7. Sync, Build APK & Print Debug Keystore SHA-256 for assetlinks.json
           npx cap sync android
           cd android
           chmod +x gradlew
           ./gradlew assembleDebug --no-daemon
+
+          echo "=== COPY THIS SHA256 FOR .well-known/assetlinks.json ==="
+          keytool -list -v -keystore ~/.android/debug.keystore -alias androiddebugkey -storepass android -keypass android | grep "SHA256:"
 
       - name: Upload Spicy Kingdom POS APK
         uses: actions/upload-artifact@v4
